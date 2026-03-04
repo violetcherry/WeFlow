@@ -1435,6 +1435,7 @@ class ChatService {
     endTime: number = 0,
     ascending: boolean = false
   ): Promise<{ success: boolean; messages?: Message[]; hasMore?: boolean; error?: string }> {
+    let releaseMessageCursorMutex: (() => void) | null = null
     try {
       const connectResult = await this.ensureConnected()
       if (!connectResult.success) {
@@ -1448,6 +1449,12 @@ class ChatService {
         await new Promise(resolve => setTimeout(resolve, 1))
       }
       this.messageCursorMutex = true
+      let mutexReleased = false
+      releaseMessageCursorMutex = () => {
+        if (mutexReleased) return
+        this.messageCursorMutex = false
+        mutexReleased = true
+      }
 
       let state = this.messageCursors.get(sessionId)
 
@@ -1486,7 +1493,7 @@ class ChatService {
 
         state = { cursor: cursorResult.cursor, fetched: 0, batchSize, startTime, endTime, ascending }
         this.messageCursors.set(sessionId, state)
-        this.messageCursorMutex = false
+        releaseMessageCursorMutex?.()
 
         // 如果需要跳过消息(offset > 0),逐批获取但不返回
         // 注意：仅在 offset === 0 时重建游标最安全；
@@ -1519,7 +1526,6 @@ class ChatService {
             }
 
             skipped += count
-            state.fetched += count
 
             // If satisfied offset, break
             if (skipped >= offset) break;
@@ -1532,6 +1538,7 @@ class ChatService {
           if (attempts >= maxSkipAttempts) {
             console.error(`[ChatService] 跳过消息超过最大尝试次数: attempts=${attempts}`)
           }
+          state.fetched = offset
           console.log(`[ChatService] 跳过完成: skipped=${skipped}, fetched=${state.fetched}, buffered=${state.bufferedMessages?.length || 0}`)
         }
       }
@@ -1557,7 +1564,6 @@ class ChatService {
         const nextBatch = await wcdbService.fetchMessageBatch(state.cursor)
         if (nextBatch.success && nextBatch.rows) {
           rows = rows.concat(nextBatch.rows)
-          state.fetched += nextBatch.rows.length
           actualHasMore = nextBatch.hasMore === true
         } else if (!nextBatch.success) {
           console.error('[ChatService] 获取消息批次失败:', nextBatch.error)
@@ -1624,14 +1630,15 @@ class ChatService {
       }
 
       state.fetched += rows.length
-      this.messageCursorMutex = false
+      releaseMessageCursorMutex?.()
 
       this.messageCacheService.set(sessionId, filtered)
       return { success: true, messages: filtered, hasMore }
     } catch (e) {
-      this.messageCursorMutex = false
       console.error('ChatService: 获取消息失败:', e)
       return { success: false, error: String(e) }
+    } finally {
+      releaseMessageCursorMutex?.()
     }
   }
 
@@ -1726,7 +1733,7 @@ class ChatService {
   }
 
 
-  async getLatestMessages(sessionId: string, limit: number = this.messageBatchDefault): Promise<{ success: boolean; messages?: Message[]; error?: string }> {
+  async getLatestMessages(sessionId: string, limit: number = this.messageBatchDefault): Promise<{ success: boolean; messages?: Message[]; hasMore?: boolean; error?: string }> {
     try {
       const connectResult = await this.ensureConnected()
       if (!connectResult.success) {
@@ -1757,7 +1764,7 @@ class ChatService {
           await Promise.allSettled(fixPromises)
         }
 
-        return { success: true, messages: normalized }
+        return { success: true, messages: normalized, hasMore: batch.hasMore === true }
       } finally {
         await wcdbService.closeMessageCursor(cursorResult.cursor)
       }

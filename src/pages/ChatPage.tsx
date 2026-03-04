@@ -290,6 +290,13 @@ interface GroupMembersPanelCacheEntry {
   includeMessageCounts: boolean
 }
 
+interface LoadMessagesOptions {
+  preferLatestPath?: boolean
+  deferGroupSenderWarmup?: boolean
+  forceInitialLimit?: number
+  switchRequestSeq?: number
+}
+
 // 全局头像加载队列管理器已移至 src/utils/AvatarLoadQueue.ts
 // 全局头像加载队列管理器已移至 src/utils/AvatarLoadQueue.ts
 import { avatarLoadQueue } from '../utils/AvatarLoadQueue'
@@ -521,6 +528,8 @@ function ChatPage(_props: ChatPageProps) {
   const sessionsRef = useRef<ChatSession[]>([])
   const currentSessionRef = useRef<string | null>(null)
   const pendingSessionLoadRef = useRef<string | null>(null)
+  const sessionSwitchRequestSeqRef = useRef(0)
+  const initialLoadRequestedSessionRef = useRef<string | null>(null)
   const prevSessionRef = useRef<string | null>(null)
   const isLoadingMessagesRef = useRef(false)
   const isLoadingMoreRef = useRef(false)
@@ -1424,6 +1433,8 @@ function ChatPage(_props: ChatPageProps) {
     preloadImageKeysRef.current.clear()
     lastPreloadSessionRef.current = null
     pendingSessionLoadRef.current = null
+    initialLoadRequestedSessionRef.current = null
+    sessionSwitchRequestSeqRef.current += 1
     setIsSessionSwitching(false)
     setSessionDetail(null)
     setIsRefreshingDetailStats(false)
@@ -1887,32 +1898,61 @@ function ChatPage(_props: ChatPageProps) {
       setIsRefreshingMessages(false)
     }
   }
-
-
-
-  // 动态游标批量大小控制
+  // 消息批量大小控制（保持稳定，避免游标反复重建）
   const currentBatchSizeRef = useRef(50)
 
+  const warmupGroupSenderProfiles = useCallback((usernames: string[], defer = false) => {
+    if (!Array.isArray(usernames) || usernames.length === 0) return
+
+    const runWarmup = () => {
+      const batchPromise = loadContactInfoBatch(usernames)
+      usernames.forEach(username => {
+        if (!senderAvatarLoading.has(username)) {
+          senderAvatarLoading.set(username, batchPromise.then(() => senderAvatarCache.get(username) || null))
+        }
+      })
+      batchPromise.finally(() => {
+        usernames.forEach(username => senderAvatarLoading.delete(username))
+      })
+    }
+
+    if (defer) {
+      if ('requestIdleCallback' in window) {
+        window.requestIdleCallback(() => {
+          runWarmup()
+        }, { timeout: 1200 })
+      } else {
+        globalThis.setTimeout(runWarmup, 120)
+      }
+      return
+    }
+
+    runWarmup()
+  }, [loadContactInfoBatch])
+
   // 加载消息
-  const loadMessages = async (sessionId: string, offset = 0, startTime = 0, endTime = 0, ascending = false) => {
+  const loadMessages = async (
+    sessionId: string,
+    offset = 0,
+    startTime = 0,
+    endTime = 0,
+    ascending = false,
+    options: LoadMessagesOptions = {}
+  ) => {
     const listEl = messageListRef.current
     const session = sessionMapRef.current.get(sessionId)
     const unreadCount = session?.unreadCount ?? 0
 
-    let messageLimit = 50
+    let messageLimit = currentBatchSizeRef.current
 
     if (offset === 0) {
-      // 初始加载：重置批量大小
-      currentBatchSizeRef.current = 50
-      // 首屏优化：消息过多时限制数量
-      messageLimit = unreadCount > 99 ? 30 : 50
+      const preferredLimit = Number.isFinite(options.forceInitialLimit)
+        ? Math.max(10, Math.floor(options.forceInitialLimit as number))
+        : (unreadCount > 99 ? 30 : 40)
+      currentBatchSizeRef.current = preferredLimit
+      messageLimit = preferredLimit
     } else {
-      // 滚动加载：动态递增 (50 -> 100 -> 200)
-      if (currentBatchSizeRef.current < 100) {
-        currentBatchSizeRef.current = 100
-      } else {
-        currentBatchSizeRef.current = 200
-      }
+      // 同一会话内保持固定批量，避免后端游标因 batch 改变而重建
       messageLimit = currentBatchSizeRef.current
     }
 
@@ -1929,11 +1969,18 @@ function ChatPage(_props: ChatPageProps) {
     const firstMsgEl = listEl?.querySelector('.message-wrapper') as HTMLElement | null
 
     try {
-      const result = await window.electronAPI.chat.getMessages(sessionId, offset, messageLimit, startTime, endTime, ascending) as {
+      const useLatestPath = offset === 0 && startTime === 0 && endTime === 0 && !ascending && options.preferLatestPath
+      const result = (useLatestPath
+        ? await window.electronAPI.chat.getLatestMessages(sessionId, messageLimit)
+        : await window.electronAPI.chat.getMessages(sessionId, offset, messageLimit, startTime, endTime, ascending)
+      ) as {
         success: boolean;
         messages?: Message[];
         hasMore?: boolean;
         error?: string
+      }
+      if (options.switchRequestSeq && options.switchRequestSeq !== sessionSwitchRequestSeqRef.current) {
+        return
       }
       if (currentSessionRef.current !== sessionId) {
         return
@@ -1947,8 +1994,7 @@ function ChatPage(_props: ChatPageProps) {
             setHasMoreMessages(false)
           }
 
-          // 预取发送者信息：在关闭加载遮罩前处理
-          const unreadCount = session?.unreadCount ?? 0
+          // 群聊发送者信息补齐改为非阻塞执行，避免影响首屏切换
           const isGroup = sessionId.includes('@chatroom')
           if (isGroup && result.messages.length > 0) {
             const unknownSenders = [...new Set(result.messages
@@ -1956,18 +2002,7 @@ function ChatPage(_props: ChatPageProps) {
               .map(m => m.senderUsername as string)
             )]
             if (unknownSenders.length > 0) {
-
-              // 在批量请求前，先将这些发送者标记为加载中，防止 MessageBubble 触发重复请求
-              const batchPromise = loadContactInfoBatch(unknownSenders)
-              unknownSenders.forEach(username => {
-                if (!senderAvatarLoading.has(username)) {
-                  senderAvatarLoading.set(username, batchPromise.then(() => senderAvatarCache.get(username) || null))
-                }
-              })
-              // 确保在请求完成后清理 loading 状态
-              batchPromise.finally(() => {
-                unknownSenders.forEach(username => senderAvatarLoading.delete(username))
-              })
+              warmupGroupSenderProfiles(unknownSenders, options.deferGroupSenderWarmup === true)
             }
           }
 
@@ -1993,15 +2028,7 @@ function ChatPage(_props: ChatPageProps) {
               .map(m => m.senderUsername as string)
             )]
             if (unknownSenders.length > 0) {
-              const batchPromise = loadContactInfoBatch(unknownSenders)
-              unknownSenders.forEach(username => {
-                if (!senderAvatarLoading.has(username)) {
-                  senderAvatarLoading.set(username, batchPromise.then(() => senderAvatarCache.get(username) || null))
-                }
-              })
-              batchPromise.finally(() => {
-                unknownSenders.forEach(username => senderAvatarLoading.delete(username))
-              })
+              warmupGroupSenderProfiles(unknownSenders, false)
             }
           }
 
@@ -2042,8 +2069,11 @@ function ChatPage(_props: ChatPageProps) {
       setLoadingMessages(false)
       setLoadingMore(false)
       if (offset === 0 && pendingSessionLoadRef.current === sessionId) {
-        pendingSessionLoadRef.current = null
-        setIsSessionSwitching(false)
+        if (!options.switchRequestSeq || options.switchRequestSeq === sessionSwitchRequestSeqRef.current) {
+          pendingSessionLoadRef.current = null
+          initialLoadRequestedSessionRef.current = null
+          setIsSessionSwitching(false)
+        }
       }
     }
   }
@@ -2088,7 +2118,10 @@ function ChatPage(_props: ChatPageProps) {
       return
     }
     if (session.username === currentSessionId) return
+    const switchRequestSeq = sessionSwitchRequestSeqRef.current + 1
+    sessionSwitchRequestSeqRef.current = switchRequestSeq
     pendingSessionLoadRef.current = session.username
+    initialLoadRequestedSessionRef.current = session.username
     setIsSessionSwitching(true)
     setCurrentSession(session.username, { preserveMessages: false })
     void hydrateSessionPreview(session.username)
@@ -2096,7 +2129,12 @@ function ChatPage(_props: ChatPageProps) {
     setJumpStartTime(0)
     setJumpEndTime(0)
     setNoMessageTable(false)
-    void loadMessages(session.username, 0, 0, 0)
+    void loadMessages(session.username, 0, 0, 0, false, {
+      preferLatestPath: true,
+      deferGroupSenderWarmup: true,
+      forceInitialLimit: 30,
+      switchRequestSeq
+    })
     // 切换会话后回到正常聊天窗口：收起详情侧栏，详情需手动再次展开
     setShowDetailPanel(false)
     setShowGroupMembersPanel(false)
@@ -2376,8 +2414,15 @@ function ChatPage(_props: ChatPageProps) {
 
   useEffect(() => {
     if (currentSessionId && messages.length === 0 && !isLoadingMessages && !isLoadingMore && !noMessageTable) {
+      if (pendingSessionLoadRef.current === currentSessionId) return
+      if (initialLoadRequestedSessionRef.current === currentSessionId) return
+      initialLoadRequestedSessionRef.current = currentSessionId
       setHasInitialMessages(false)
-      loadMessages(currentSessionId, 0)
+      void loadMessages(currentSessionId, 0, 0, 0, false, {
+        preferLatestPath: true,
+        deferGroupSenderWarmup: true,
+        forceInitialLimit: 30
+      })
     }
   }, [currentSessionId, messages.length, isLoadingMessages, isLoadingMore, noMessageTable])
 
