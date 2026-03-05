@@ -50,6 +50,7 @@ type SessionLayout = 'shared' | 'per-session'
 
 type DisplayNamePreference = 'group-nickname' | 'remark' | 'nickname'
 type DateRangePreset = 'all' | 'today' | 'yesterday' | 'last3days' | 'last7days' | 'last30days' | 'custom'
+type CalendarCell = { date: Date; inCurrentMonth: boolean }
 
 type TextExportFormat = 'chatlab' | 'chatlab-jsonl' | 'json' | 'arkme-json' | 'html' | 'txt' | 'excel' | 'weclone' | 'sql'
 type SnsTimelineExportFormat = 'json' | 'html' | 'arkmejson'
@@ -142,6 +143,14 @@ interface ExportDialogState {
   sessionIds: string[]
   sessionNames: string[]
   title: string
+}
+
+interface TimeRangeDialogDraft {
+  preset: DateRangePreset
+  useAllTime: boolean
+  dateRange: { start: Date; end: Date }
+  startPanelMonth: Date
+  endPanelMonth: Date
 }
 
 const defaultTxtColumns = ['index', 'time', 'senderRole', 'messageType', 'content']
@@ -469,16 +478,40 @@ const formatDateInputValue = (date: Date): string => {
   return `${y}-${m}-${d}`
 }
 
-const parseDateInput = (value: string, endOfDay: boolean): Date => {
-  const [year, month, day] = value.split('-').map(v => Number(v))
-  const date = new Date(year, month - 1, day)
-  if (endOfDay) {
-    date.setHours(23, 59, 59, 999)
-  } else {
-    date.setHours(0, 0, 0, 0)
-  }
-  return date
+const toMonthStart = (date: Date): Date => new Date(date.getFullYear(), date.getMonth(), 1)
+
+const addMonths = (date: Date, delta: number): Date => {
+  const next = new Date(date)
+  next.setMonth(next.getMonth() + delta)
+  return toMonthStart(next)
 }
+
+const isSameDay = (left: Date, right: Date): boolean => (
+  left.getFullYear() === right.getFullYear() &&
+  left.getMonth() === right.getMonth() &&
+  left.getDate() === right.getDate()
+)
+
+const buildCalendarCells = (monthStart: Date): CalendarCell[] => {
+  const firstDay = new Date(monthStart.getFullYear(), monthStart.getMonth(), 1)
+  const startOffset = firstDay.getDay()
+  const gridStart = new Date(firstDay)
+  gridStart.setDate(gridStart.getDate() - startOffset)
+  const cells: CalendarCell[] = []
+  for (let index = 0; index < 42; index += 1) {
+    const current = new Date(gridStart)
+    current.setDate(gridStart.getDate() + index)
+    cells.push({
+      date: current,
+      inCurrentMonth: current.getMonth() === monthStart.getMonth()
+    })
+  }
+  return cells
+}
+
+const formatCalendarMonthTitle = (date: Date): string => `${date.getFullYear()}年${date.getMonth() + 1}月`
+
+const WEEKDAY_SHORT_LABELS = ['日', '一', '二', '三', '四', '五', '六']
 
 const toKindByContactType = (session: AppChatSession, contact?: ContactInfo): ConversationTab => {
   if (session.username.endsWith('@chatroom')) return 'group'
@@ -1157,6 +1190,7 @@ function ExportPage() {
   const [snsExportVideos, setSnsExportVideos] = useState(false)
   const [isTimeRangeDialogOpen, setIsTimeRangeDialogOpen] = useState(false)
   const [timeRangePreset, setTimeRangePreset] = useState<DateRangePreset>('all')
+  const [timeRangeDialogDraft, setTimeRangeDialogDraft] = useState<TimeRangeDialogDraft | null>(null)
 
   const [options, setOptions] = useState<ExportOptions>({
     format: 'json',
@@ -2265,70 +2299,130 @@ function ExportPage() {
   const closeExportDialog = useCallback(() => {
     setExportDialog(prev => ({ ...prev, open: false }))
     setIsTimeRangeDialogOpen(false)
+    setTimeRangeDialogDraft(null)
   }, [])
 
-  const applyTimeRangePreset = useCallback((preset: Exclude<DateRangePreset, 'custom'>) => {
-    setTimeRangePreset(preset)
-    if (preset === 'all') {
-      setOptions(prev => ({
-        ...prev,
-        useAllTime: true,
-        dateRange: prev.dateRange ?? createDefaultDateRange()
-      }))
-      return
+  const buildTimeRangeDialogDraft = useCallback((): TimeRangeDialogDraft => {
+    const dateRange = options.dateRange ?? createDefaultDateRange()
+    return {
+      preset: timeRangePreset,
+      useAllTime: options.useAllTime,
+      dateRange: {
+        start: new Date(dateRange.start),
+        end: new Date(dateRange.end)
+      },
+      startPanelMonth: toMonthStart(dateRange.start),
+      endPanelMonth: toMonthStart(dateRange.end)
     }
-    const range = createDateRangeByPreset(preset)
-    setOptions(prev => ({
-      ...prev,
-      useAllTime: false,
-      dateRange: range
-    }))
+  }, [options.dateRange, options.useAllTime, timeRangePreset])
+
+  const openTimeRangeDialog = useCallback(() => {
+    setTimeRangeDialogDraft(buildTimeRangeDialogDraft())
+    setIsTimeRangeDialogOpen(true)
+  }, [buildTimeRangeDialogDraft])
+
+  const closeTimeRangeDialog = useCallback(() => {
+    setIsTimeRangeDialogOpen(false)
+    setTimeRangeDialogDraft(null)
   }, [])
 
-  const activateCustomTimeRange = useCallback(() => {
-    setTimeRangePreset('custom')
-    setOptions(prev => ({
-      ...prev,
-      useAllTime: false,
-      dateRange: prev.dateRange ?? createDefaultDateRange()
-    }))
-  }, [])
+  const applyTimeRangePresetToDraft = useCallback((preset: Exclude<DateRangePreset, 'custom'>) => {
+    setTimeRangeDialogDraft(prev => {
+      const base = prev ?? buildTimeRangeDialogDraft()
+      if (preset === 'all') {
+        return {
+          ...base,
+          preset,
+          useAllTime: true
+        }
+      }
+      const range = createDateRangeByPreset(preset)
+      return {
+        ...base,
+        preset,
+        useAllTime: false,
+        dateRange: {
+          start: range.start,
+          end: range.end
+        },
+        startPanelMonth: toMonthStart(range.start),
+        endPanelMonth: toMonthStart(range.end)
+      }
+    })
+  }, [buildTimeRangeDialogDraft])
 
-  const updateCustomDateRangeStart = useCallback((value: string) => {
-    const start = parseDateInput(value, false)
-    setTimeRangePreset('custom')
-    setOptions(prev => ({
-      ...prev,
-      useAllTime: false,
-      dateRange: prev.dateRange
-        ? {
-            start,
-            end: prev.dateRange.end < start ? parseDateInput(value, true) : prev.dateRange.end
-          }
-        : { start, end: new Date() }
-    }))
-  }, [])
+  const updateTimeRangeDraftStart = useCallback((targetDate: Date) => {
+    const start = startOfDay(targetDate)
+    setTimeRangeDialogDraft(prev => {
+      const base = prev ?? buildTimeRangeDialogDraft()
+      const nextEnd = base.dateRange.end < start ? endOfDay(start) : base.dateRange.end
+      return {
+        ...base,
+        preset: 'custom',
+        useAllTime: false,
+        dateRange: {
+          start,
+          end: nextEnd
+        },
+        startPanelMonth: toMonthStart(start),
+        endPanelMonth: toMonthStart(nextEnd)
+      }
+    })
+  }, [buildTimeRangeDialogDraft])
 
-  const updateCustomDateRangeEnd = useCallback((value: string) => {
-    const end = parseDateInput(value, true)
-    setTimeRangePreset('custom')
+  const updateTimeRangeDraftEnd = useCallback((targetDate: Date) => {
+    const end = endOfDay(targetDate)
+    setTimeRangeDialogDraft(prev => {
+      const base = prev ?? buildTimeRangeDialogDraft()
+      const nextEnd = end < base.dateRange.start ? endOfDay(base.dateRange.start) : end
+      return {
+        ...base,
+        preset: 'custom',
+        useAllTime: false,
+        dateRange: {
+          start: base.dateRange.start,
+          end: nextEnd
+        },
+        endPanelMonth: toMonthStart(nextEnd)
+      }
+    })
+  }, [buildTimeRangeDialogDraft])
+
+  const shiftTimeRangePanelMonth = useCallback((panel: 'start' | 'end', delta: number) => {
+    setTimeRangeDialogDraft(prev => {
+      const base = prev ?? buildTimeRangeDialogDraft()
+      if (panel === 'start') {
+        return {
+          ...base,
+          startPanelMonth: addMonths(base.startPanelMonth, delta)
+        }
+      }
+      return {
+        ...base,
+        endPanelMonth: addMonths(base.endPanelMonth, delta)
+      }
+    })
+  }, [buildTimeRangeDialogDraft])
+
+  const commitTimeRangeDialogDraft = useCallback(() => {
+    const draft = timeRangeDialogDraft ?? buildTimeRangeDialogDraft()
+    setTimeRangePreset(draft.preset)
     setOptions(prev => ({
       ...prev,
-      useAllTime: false,
-      dateRange: prev.dateRange
-        ? {
-            start: prev.dateRange.start > end ? parseDateInput(value, false) : prev.dateRange.start,
-            end
-          }
-        : { start: new Date(), end }
+      useAllTime: draft.useAllTime,
+      dateRange: {
+        start: new Date(draft.dateRange.start),
+        end: new Date(draft.dateRange.end)
+      }
     }))
-  }, [])
+    closeTimeRangeDialog()
+  }, [buildTimeRangeDialogDraft, closeTimeRangeDialog, timeRangeDialogDraft])
 
   const timeRangeSummaryLabel = useMemo(() => {
     if (options.useAllTime) return '默认导出全部时间'
     if (timeRangePreset === 'today') return '今天'
     if (timeRangePreset === 'yesterday') return '昨天'
-    if (timeRangePreset === 'last3days') return '最近三天'
+    if (timeRangePreset === 'last3days') return '最近3天'
     if (timeRangePreset === 'last7days') return '最近一周'
     if (timeRangePreset === 'last30days') return '最近一个月'
     if (options.dateRange) {
@@ -2337,10 +2431,22 @@ function ExportPage() {
     return '自定义时间范围'
   }, [options.useAllTime, options.dateRange, timeRangePreset])
 
+  const activeTimeRangeDialogDraft = timeRangeDialogDraft ?? buildTimeRangeDialogDraft()
+
   const isTimeRangePresetActive = useCallback((preset: DateRangePreset): boolean => {
-    if (preset === 'all') return options.useAllTime
-    return !options.useAllTime && timeRangePreset === preset
-  }, [options.useAllTime, timeRangePreset])
+    if (preset === 'all') return activeTimeRangeDialogDraft.useAllTime
+    return !activeTimeRangeDialogDraft.useAllTime && activeTimeRangeDialogDraft.preset === preset
+  }, [activeTimeRangeDialogDraft])
+
+  const startPanelCells = useMemo(
+    () => buildCalendarCells(activeTimeRangeDialogDraft.startPanelMonth),
+    [activeTimeRangeDialogDraft.startPanelMonth]
+  )
+
+  const endPanelCells = useMemo(
+    () => buildCalendarCells(activeTimeRangeDialogDraft.endPanelMonth),
+    [activeTimeRangeDialogDraft.endPanelMonth]
+  )
 
   useEffect(() => {
     const unsubscribe = onOpenSingleExport((payload) => {
@@ -4478,7 +4584,7 @@ function ExportPage() {
                   <button
                     type="button"
                     className="time-range-trigger"
-                    onClick={() => setIsTimeRangeDialogOpen(true)}
+                    onClick={openTimeRangeDialog}
                   >
                     <span>{timeRangeSummaryLabel}</span>
                     <span className="time-range-arrow">&gt;</span>
@@ -4546,14 +4652,14 @@ function ExportPage() {
             </div>
 
             {isTimeRangeDialogOpen && (
-              <div className="time-range-dialog-overlay" onClick={() => setIsTimeRangeDialogOpen(false)}>
+              <div className="time-range-dialog-overlay" onClick={closeTimeRangeDialog}>
                 <div className="time-range-dialog" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
                   <div className="time-range-dialog-header">
                     <h4>时间范围设置</h4>
                     <button
                       type="button"
                       className="close-icon-btn"
-                      onClick={() => setIsTimeRangeDialogOpen(false)}
+                      onClick={closeTimeRangeDialog}
                       aria-label="关闭时间范围设置"
                     >
                       <X size={14} />
@@ -4562,28 +4668,20 @@ function ExportPage() {
 
                   <div className="time-range-preset-list">
                     {([
-                      { value: 'all', label: '默认导出全部时间' },
+                      { value: 'all', label: '全部时间' },
                       { value: 'today', label: '今天' },
                       { value: 'yesterday', label: '昨天' },
-                      { value: 'last3days', label: '最近三天' },
+                      { value: 'last3days', label: '最近3天' },
                       { value: 'last7days', label: '最近一周' },
-                      { value: 'last30days', label: '最近一个月' },
-                      { value: 'custom', label: '自定义' }
-                    ] as Array<{ value: DateRangePreset; label: string }>).map((preset) => {
+                      { value: 'last30days', label: '最近一个月' }
+                    ] as Array<{ value: Exclude<DateRangePreset, 'custom'>; label: string }>).map((preset) => {
                       const isActive = isTimeRangePresetActive(preset.value)
                       return (
                         <button
                           key={preset.value}
                           type="button"
                           className={`time-range-preset-item ${isActive ? 'active' : ''}`}
-                          onClick={() => {
-                            if (preset.value === 'custom') {
-                              activateCustomTimeRange()
-                              return
-                            }
-                            applyTimeRangePreset(preset.value)
-                            setIsTimeRangeDialogOpen(false)
-                          }}
+                          onClick={() => applyTimeRangePresetToDraft(preset.value)}
                         >
                           <span>{preset.label}</span>
                           {isActive && <Check size={14} />}
@@ -4592,30 +4690,88 @@ function ExportPage() {
                     })}
                   </div>
 
-                  {!options.useAllTime && timeRangePreset === 'custom' && options.dateRange && (
-                    <div className="time-range-custom-row">
-                      <label>
-                        开始日期
-                        <input
-                          type="date"
-                          value={formatDateInputValue(options.dateRange.start)}
-                          onChange={(event) => updateCustomDateRangeStart(event.target.value)}
-                        />
-                      </label>
-                      <label>
-                        结束日期
-                        <input
-                          type="date"
-                          value={formatDateInputValue(options.dateRange.end)}
-                          onChange={(event) => updateCustomDateRangeEnd(event.target.value)}
-                        />
-                      </label>
+                  <div className="time-range-calendar-grid">
+                    <section className="time-range-calendar-panel">
+                      <div className="time-range-calendar-panel-header">
+                        <div className="time-range-calendar-date-label">
+                          <span>起始日期</span>
+                          <strong>{formatDateInputValue(activeTimeRangeDialogDraft.dateRange.start)}</strong>
+                        </div>
+                        <div className="time-range-calendar-nav">
+                          <button type="button" onClick={() => shiftTimeRangePanelMonth('start', -1)} aria-label="上个月">‹</button>
+                          <span>{formatCalendarMonthTitle(activeTimeRangeDialogDraft.startPanelMonth)}</span>
+                          <button type="button" onClick={() => shiftTimeRangePanelMonth('start', 1)} aria-label="下个月">›</button>
+                        </div>
+                      </div>
+                      <div className="time-range-calendar-weekdays">
+                        {WEEKDAY_SHORT_LABELS.map(label => (
+                          <span key={`start-weekday-${label}`}>{label}</span>
+                        ))}
+                      </div>
+                      <div className="time-range-calendar-days">
+                        {startPanelCells.map((cell) => {
+                          const isSelected = isSameDay(cell.date, activeTimeRangeDialogDraft.dateRange.start)
+                          return (
+                            <button
+                              key={`start-${cell.date.getTime()}`}
+                              type="button"
+                              className={`time-range-calendar-day ${cell.inCurrentMonth ? '' : 'outside'} ${isSelected ? 'selected' : ''}`}
+                              onClick={() => updateTimeRangeDraftStart(cell.date)}
+                            >
+                              {cell.date.getDate()}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </section>
+
+                    <section className="time-range-calendar-panel">
+                      <div className="time-range-calendar-panel-header">
+                        <div className="time-range-calendar-date-label">
+                          <span>截止日期</span>
+                          <strong>{formatDateInputValue(activeTimeRangeDialogDraft.dateRange.end)}</strong>
+                        </div>
+                        <div className="time-range-calendar-nav">
+                          <button type="button" onClick={() => shiftTimeRangePanelMonth('end', -1)} aria-label="上个月">‹</button>
+                          <span>{formatCalendarMonthTitle(activeTimeRangeDialogDraft.endPanelMonth)}</span>
+                          <button type="button" onClick={() => shiftTimeRangePanelMonth('end', 1)} aria-label="下个月">›</button>
+                        </div>
+                      </div>
+                      <div className="time-range-calendar-weekdays">
+                        {WEEKDAY_SHORT_LABELS.map(label => (
+                          <span key={`end-weekday-${label}`}>{label}</span>
+                        ))}
+                      </div>
+                      <div className="time-range-calendar-days">
+                        {endPanelCells.map((cell) => {
+                          const isSelected = isSameDay(cell.date, activeTimeRangeDialogDraft.dateRange.end)
+                          return (
+                            <button
+                              key={`end-${cell.date.getTime()}`}
+                              type="button"
+                              className={`time-range-calendar-day ${cell.inCurrentMonth ? '' : 'outside'} ${isSelected ? 'selected' : ''}`}
+                              onClick={() => updateTimeRangeDraftEnd(cell.date)}
+                            >
+                              {cell.date.getDate()}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </section>
+                  </div>
+
+                  {activeTimeRangeDialogDraft.useAllTime && (
+                    <div className="time-range-full-hint">
+                      已选择“全部时间”，确认后会按默认导出全部时间；下方日期仅用于切换为自定义范围时预览。
                     </div>
                   )}
 
                   <div className="time-range-dialog-actions">
-                    <button type="button" className="secondary-btn" onClick={() => setIsTimeRangeDialogOpen(false)}>
-                      完成
+                    <button type="button" className="secondary-btn" onClick={closeTimeRangeDialog}>
+                      取消
+                    </button>
+                    <button type="button" className="primary-btn" onClick={commitTimeRangeDialogDraft}>
+                      确认
                     </button>
                   </div>
                 </div>
