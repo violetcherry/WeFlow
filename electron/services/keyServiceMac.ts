@@ -370,7 +370,7 @@ export class KeyServiceMac {
 
     let stdout = ''
     try {
-      const result = await execFileAsync('osascript', scriptLines.flatMap(line => ['-e', line]), {
+      const result = await execFileAsync('/usr/bin/osascript', scriptLines.flatMap(line => ['-e', line]), {
         timeout: waitMs + 20_000
       })
       stdout = result.stdout
@@ -434,7 +434,7 @@ export class KeyServiceMac {
     ]
 
     try {
-      await execFileAsync('osascript', script.flatMap(line => ['-e', line]), {
+      await execFileAsync('/usr/bin/osascript', script.flatMap(line => ['-e', line]), {
         timeout: 30_000
       })
       return true
@@ -777,7 +777,7 @@ export class KeyServiceMac {
       let child: ReturnType<typeof spawn>
       if (elevated) {
         const shellCmd = `'${helperPath}' ${pid} ${ciphertextHex}`
-        child = spawn('osascript', ['-e', `do shell script ${JSON.stringify(shellCmd)} with administrator privileges`],
+        child = spawn('/usr/bin/osascript', ['-e', `do shell script ${JSON.stringify(shellCmd)} with administrator privileges`],
           { stdio: ['ignore', 'pipe', 'pipe'] })
       } else {
         child = spawn(helperPath, [String(pid), ciphertextHex], { stdio: ['ignore', 'pipe', 'pipe'] })
