@@ -10,7 +10,7 @@ import {
   Eye, EyeOff, FolderSearch, FolderOpen, Search, Copy,
   RotateCcw, Trash2, Plug, Check, Sun, Moon, Monitor,
   Palette, Database, HardDrive, Info, RefreshCw, ChevronDown, Download, Mic,
-  ShieldCheck, Fingerprint, Lock, KeyRound, Bell, Globe, BarChart2, X
+  ShieldCheck, Fingerprint, Lock, KeyRound, Bell, Globe, BarChart2, X, UserRound
 } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import './SettingsPage.scss'
@@ -34,6 +34,8 @@ const tabs: { id: SettingsTab; label: string; icon: React.ElementType }[] = [
 interface WxidOption {
   wxid: string
   modifiedTime: number
+  nickname?: string
+  avatarUrl?: string
 }
 
 interface SettingsPageProps {
@@ -2132,14 +2134,24 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
               </div>
               <div className="wxid-dialog-list">
                 {wxidOptions.map((opt) => (
-                  <div
-                    key={opt.wxid}
-                    className={`wxid-dialog-item ${opt.wxid === wxid ? 'active' : ''}`}
-                    onClick={() => handleSelectWxid(opt.wxid)}
-                  >
-                    <span className="wxid-id">{opt.wxid}</span>
-                    <span className="wxid-date">最后修改 {new Date(opt.modifiedTime).toLocaleString()}</span>
-                  </div>
+                    <div
+                        key={opt.wxid}
+                        className={`wxid-dialog-item ${opt.wxid === wxid ? 'active' : ''}`}
+                        onClick={() => handleSelectWxid(opt.wxid)}
+                    >
+                      <div className="wxid-profile-row">
+                        {opt.avatarUrl ? (
+                            <img src={opt.avatarUrl} alt="avatar" className="wxid-avatar" />
+                        ) : (
+                            <div className="wxid-avatar-fallback"><UserRound size={18}/></div>
+                        )}
+                        <div className="wxid-info-col">
+                          <span className="wxid-id">{opt.nickname || opt.wxid}</span>
+                          {opt.nickname && <span className="wxid-date">{opt.wxid}</span>}
+                        </div>
+                      </div>
+                      <span className="wxid-date" style={{marginLeft: 'auto'}}>最后修改 {new Date(opt.modifiedTime).toLocaleString()}</span>
+                    </div>
                 ))}
               </div>
               <div className="wxid-dialog-footer">

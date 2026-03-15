@@ -47,7 +47,12 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
   const [imageAesKey, setImageAesKey] = useState('')
   const [cachePath, setCachePath] = useState('')
   const [wxid, setWxid] = useState('')
-  const [wxidOptions, setWxidOptions] = useState<Array<{ wxid: string; modifiedTime: number }>>([])
+  const [wxidOptions, setWxidOptions] = useState<Array<{
+      avatarUrl?: string;
+      nickname?: string;
+      wxid: string;
+      modifiedTime: number
+  }>>([])
   const [showWxidSelect, setShowWxidSelect] = useState(false)
   const wxidSelectRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
@@ -688,22 +693,32 @@ function WelcomePage({ standalone = false }: WelcomePageProps) {
                     onChange={(e) => setWxid(e.target.value)}
                   />
                   {showWxidSelect && wxidOptions.length > 0 && (
-                    <div className="wxid-dropdown">
-                      {wxidOptions.map((opt) => (
-                        <button
-                          key={opt.wxid}
-                          type="button"
-                          className={`wxid-option ${opt.wxid === wxid ? 'active' : ''}`}
-                          onClick={() => {
-                            setWxid(opt.wxid)
-                            setShowWxidSelect(false)
-                          }}
-                        >
-                          <span className="wxid-name">{opt.wxid}</span>
-                          <span className="wxid-time">{formatModifiedTime(opt.modifiedTime)}</span>
-                        </button>
-                      ))}
-                    </div>
+                      <div className="wxid-dropdown">
+                        {wxidOptions.map((opt) => (
+                            <button
+                                key={opt.wxid}
+                                type="button"
+                                className={`wxid-option ${opt.wxid === wxid ? 'active' : ''}`}
+                                onClick={() => {
+                                  setWxid(opt.wxid)
+                                  setShowWxidSelect(false)
+                                }}
+                            >
+                              <div className="wxid-profile">
+                                {opt.avatarUrl ? (
+                                    <img src={opt.avatarUrl} alt="avatar" className="wxid-avatar" />
+                                ) : (
+                                    <div className="wxid-avatar-fallback"><UserRound size={14}/></div>
+                                )}
+                                <div className="wxid-info">
+                                  <span className="wxid-nickname">{opt.nickname || opt.wxid}</span>
+                                  {opt.nickname && <span className="wxid-sub">{opt.wxid}</span>}
+                                </div>
+                              </div>
+                              <span className="wxid-time">{formatModifiedTime(opt.modifiedTime)}</span>
+                            </button>
+                        ))}
+                      </div>
                   )}
                 </div>
 
