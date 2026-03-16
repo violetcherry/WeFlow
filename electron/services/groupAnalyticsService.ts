@@ -49,6 +49,12 @@ export interface GroupMediaStats {
   total: number
 }
 
+export interface GroupMemberMessagesPage {
+  messages: Message[]
+  hasMore: boolean
+  nextCursor: number
+}
+
 interface GroupMemberContactInfo {
   remark: string
   nickName: string
@@ -255,20 +261,47 @@ class GroupAnalyticsService {
    * 从 DLL 获取群成员的群昵称
    */
   private async getGroupNicknamesForRoom(chatroomId: string, candidates: string[] = []): Promise<Map<string, string>> {
+    const nicknameMap = new Map<string, string>()
+
     try {
-      const escapedChatroomId = chatroomId.replace(/'/g, "''")
-      const sql = `SELECT ext_buffer FROM chat_room WHERE username='${escapedChatroomId}' LIMIT 1`
-      const result = await wcdbService.execQuery('contact', null, sql)
+      const dllResult = await wcdbService.getGroupNicknames(chatroomId)
+      if (dllResult.success && dllResult.nicknames) {
+        this.mergeGroupNicknameEntries(nicknameMap, Object.entries(dllResult.nicknames))
+      }
+    } catch (e) {
+      console.error('getGroupNicknamesForRoom dll error:', e)
+    }
+
+    try {
+      const sql = 'SELECT ext_buffer FROM chat_room WHERE username = ? LIMIT 1'
+      const result = await wcdbService.execQuery('contact', null, sql, [chatroomId])
       if (!result.success || !result.rows || result.rows.length === 0) {
-        return new Map<string, string>()
+        return nicknameMap
       }
 
       const extBuffer = this.decodeExtBuffer((result.rows[0] as any).ext_buffer)
-      if (!extBuffer) return new Map<string, string>()
-      return this.parseGroupNicknamesFromExtBuffer(extBuffer, candidates)
+      if (!extBuffer) return nicknameMap
+      this.mergeGroupNicknameEntries(nicknameMap, this.parseGroupNicknamesFromExtBuffer(extBuffer, candidates).entries())
+      return nicknameMap
     } catch (e) {
       console.error('getGroupNicknamesForRoom error:', e)
-      return new Map<string, string>()
+      return nicknameMap
+    }
+  }
+
+  private mergeGroupNicknameEntries(
+    target: Map<string, string>,
+    entries: Iterable<[string, string]>
+  ): void {
+    for (const [memberIdRaw, nicknameRaw] of entries) {
+      const nickname = this.normalizeGroupNickname(nicknameRaw || '')
+      if (!nickname) continue
+      for (const alias of this.buildIdCandidates([memberIdRaw])) {
+        if (!alias) continue
+        if (!target.has(alias)) target.set(alias, nickname)
+        const lower = alias.toLowerCase()
+        if (!target.has(lower)) target.set(lower, nickname)
+      }
     }
   }
 
@@ -769,6 +802,100 @@ class GroupAnalyticsService {
     }
 
     return { success: true, data: matchedMessages }
+  }
+
+  async getGroupMemberMessages(
+    chatroomId: string,
+    memberUsername: string,
+    options?: { startTime?: number; endTime?: number; limit?: number; cursor?: number }
+  ): Promise<{ success: boolean; data?: GroupMemberMessagesPage; error?: string }> {
+    try {
+      const conn = await this.ensureConnected()
+      if (!conn.success) return { success: false, error: conn.error }
+
+      const normalizedChatroomId = String(chatroomId || '').trim()
+      const normalizedMemberUsername = String(memberUsername || '').trim()
+      if (!normalizedChatroomId) return { success: false, error: '群聊ID不能为空' }
+      if (!normalizedMemberUsername) return { success: false, error: '成员ID不能为空' }
+
+      const startTimeValue = Number.isFinite(options?.startTime) && typeof options?.startTime === 'number'
+        ? Math.max(0, Math.floor(options.startTime))
+        : 0
+      const endTimeValue = Number.isFinite(options?.endTime) && typeof options?.endTime === 'number'
+        ? Math.max(0, Math.floor(options.endTime))
+        : 0
+      const limit = Number.isFinite(options?.limit) && typeof options?.limit === 'number'
+        ? Math.max(1, Math.min(100, Math.floor(options.limit)))
+        : 50
+      let cursor = Number.isFinite(options?.cursor) && typeof options?.cursor === 'number'
+        ? Math.max(0, Math.floor(options.cursor))
+        : 0
+
+      const matchedMessages: Message[] = []
+      const batchSize = Math.max(limit * 2, 100)
+      let hasMore = false
+
+      while (matchedMessages.length < limit) {
+        const batch = await chatService.getMessages(
+          normalizedChatroomId,
+          cursor,
+          batchSize,
+          startTimeValue,
+          endTimeValue,
+          false
+        )
+        if (!batch.success || !batch.messages) {
+          return { success: false, error: batch.error || '获取群成员消息失败' }
+        }
+
+        const currentMessages = batch.messages
+        const nextCursor = typeof batch.nextOffset === 'number'
+          ? Math.max(cursor, Math.floor(batch.nextOffset))
+          : cursor + currentMessages.length
+
+        let overflowMatchFound = false
+        for (const message of currentMessages) {
+          if (!this.isSameAccountIdentity(normalizedMemberUsername, message.senderUsername)) {
+            continue
+          }
+
+          if (matchedMessages.length < limit) {
+            matchedMessages.push(message)
+          } else {
+            overflowMatchFound = true
+            break
+          }
+        }
+
+        cursor = nextCursor
+
+        if (overflowMatchFound) {
+          hasMore = true
+          break
+        }
+
+        if (currentMessages.length === 0 || !batch.hasMore) {
+          hasMore = false
+          break
+        }
+
+        if (matchedMessages.length >= limit) {
+          hasMore = true
+          break
+        }
+      }
+
+      return {
+        success: true,
+        data: {
+          messages: matchedMessages,
+          hasMore,
+          nextCursor: cursor
+        }
+      }
+    } catch (e) {
+      return { success: false, error: String(e) }
+    }
   }
 
   async getGroupChats(): Promise<{ success: boolean; data?: GroupChatInfo[]; error?: string }> {

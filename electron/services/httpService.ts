@@ -11,6 +11,7 @@ import { wcdbService } from './wcdbService'
 import { ConfigService } from './config'
 import { videoService } from './videoService'
 import { imageDecryptService } from './imageDecryptService'
+import { groupAnalyticsService } from './groupAnalyticsService'
 
 // ChatLab 格式定义
 interface ChatLabHeader {
@@ -238,6 +239,8 @@ class HttpService {
         await this.handleSessions(url, res)
       } else if (pathname === '/api/v1/contacts') {
         await this.handleContacts(url, res)
+      } else if (pathname === '/api/v1/group-members') {
+        await this.handleGroupMembers(url, res)
       } else if (pathname.startsWith('/api/v1/media/')) {
         this.handleMediaRequest(pathname, res)
       } else {
@@ -589,6 +592,54 @@ class HttpService {
     }
   }
 
+  /**
+   * 处理群成员查询
+   * GET /api/v1/group-members?chatroomId=xxx@chatroom&includeMessageCounts=1&forceRefresh=0
+   */
+  private async handleGroupMembers(url: URL, res: http.ServerResponse): Promise<void> {
+    const chatroomId = (url.searchParams.get('chatroomId') || url.searchParams.get('talker') || '').trim()
+    const includeMessageCounts = this.parseBooleanParam(url, ['includeMessageCounts', 'withCounts'], false)
+    const forceRefresh = this.parseBooleanParam(url, ['forceRefresh'], false)
+
+    if (!chatroomId) {
+      this.sendError(res, 400, 'Missing chatroomId')
+      return
+    }
+
+    try {
+      const result = await groupAnalyticsService.getGroupMembersPanelData(chatroomId, {
+        forceRefresh,
+        includeMessageCounts
+      })
+      if (!result.success || !result.data) {
+        this.sendError(res, 500, result.error || 'Failed to get group members')
+        return
+      }
+
+      this.sendJson(res, {
+        success: true,
+        chatroomId,
+        count: result.data.length,
+        fromCache: result.fromCache,
+        updatedAt: result.updatedAt,
+        members: result.data.map((member) => ({
+          wxid: member.username,
+          displayName: member.displayName,
+          nickname: member.nickname || '',
+          remark: member.remark || '',
+          alias: member.alias || '',
+          groupNickname: member.groupNickname || '',
+          avatarUrl: member.avatarUrl,
+          isOwner: Boolean(member.isOwner),
+          isFriend: Boolean(member.isFriend),
+          messageCount: Number.isFinite(member.messageCount) ? member.messageCount : 0
+        }))
+      })
+    } catch (error) {
+      this.sendError(res, 500, String(error))
+    }
+  }
+
   private getApiMediaExportPath(): string {
     return path.join(this.configService.getCacheBasePath(), 'api-media')
   }
@@ -886,7 +937,12 @@ class HttpService {
 
   private lookupGroupNickname(groupNicknamesMap: Map<string, string>, sender: string): string {
     if (!sender) return ''
-    return groupNicknamesMap.get(sender) || groupNicknamesMap.get(sender.toLowerCase()) || ''
+    const cleaned = this.normalizeAccountId(sender)
+    return groupNicknamesMap.get(sender)
+      || groupNicknamesMap.get(sender.toLowerCase())
+      || groupNicknamesMap.get(cleaned)
+      || groupNicknamesMap.get(cleaned.toLowerCase())
+      || ''
   }
 
   private resolveChatLabSenderInfo(
@@ -957,7 +1013,21 @@ class HttpService {
       try {
         const result = await wcdbService.getGroupNicknames(talkerId)
         if (result.success && result.nicknames) {
-          groupNicknamesMap = new Map(Object.entries(result.nicknames))
+          groupNicknamesMap = new Map()
+          for (const [memberIdRaw, nicknameRaw] of Object.entries(result.nicknames)) {
+            const memberId = String(memberIdRaw || '').trim()
+            const nickname = String(nicknameRaw || '').trim()
+            if (!memberId || !nickname) continue
+
+            groupNicknamesMap.set(memberId, nickname)
+            groupNicknamesMap.set(memberId.toLowerCase(), nickname)
+
+            const cleaned = this.normalizeAccountId(memberId)
+            if (cleaned) {
+              groupNicknamesMap.set(cleaned, nickname)
+              groupNicknamesMap.set(cleaned.toLowerCase(), nickname)
+            }
+          }
         }
       } catch (e) {
         console.error('[HttpService] Failed to get group nicknames:', e)

@@ -1,6 +1,6 @@
 .settings-modal-overlay {
   position: fixed;
-  top: 41px;
+  top: 0;
   left: 0;
   right: 0;
   bottom: 0;
@@ -1705,7 +1705,7 @@
 
 .wxid-dialog-item {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 4px;
   padding: 14px 16px;
   border-radius: 10px;
@@ -1741,6 +1741,66 @@
   border-top: 1px solid var(--border-primary);
   display: flex;
   justify-content: flex-end;
+}
+
+.wxid-profile-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+
+  .wxid-avatar {
+    width: 38px;
+    height: 38px;
+    border-radius: 8px;
+    object-fit: cover;
+  }
+
+  .wxid-avatar-fallback {
+    width: 38px;
+    height: 38px;
+    border-radius: 8px;
+    background: var(--bg-tertiary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-tertiary);
+  }
+
+  .wxid-info-col {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+}
+
+.wxid-profile-mini {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+
+  .wxid-avatar {
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    object-fit: cover;
+  }
+
+  .wxid-avatar-fallback {
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    background: var(--bg-tertiary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-tertiary);
+  }
+
+  .wxid-info-col {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
 
 // 通知过滤双列表容器

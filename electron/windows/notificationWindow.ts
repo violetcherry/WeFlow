@@ -132,7 +132,7 @@ async function showAndSend(win: BrowserWindow, data: any) {
 
     // 更新位置
     const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize
-    const winWidth = 344
+    const winWidth = position === 'top-center' ? 280 : 344
     const winHeight = 114
     const padding = 20
 
@@ -140,6 +140,10 @@ async function showAndSend(win: BrowserWindow, data: any) {
     let y = 0
 
     switch (position) {
+        case 'top-center':
+            x = (screenWidth - winWidth) / 2
+            y = padding
+            break
         case 'top-right':
             x = screenWidth - winWidth - padding
             y = padding
@@ -166,7 +170,7 @@ async function showAndSend(win: BrowserWindow, data: any) {
     win.showInactive() // 显示但不聚焦
     win.setAlwaysOnTop(true, 'screen-saver') // 最高层级
 
-    win.webContents.send('notification:show', data)
+    win.webContents.send('notification:show', { ...data, position })
 
     // 自动关闭计时器通常由渲染进程管理
     // 渲染进程发送 'notification:close' 来隐藏窗口

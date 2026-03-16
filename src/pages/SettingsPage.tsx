@@ -10,7 +10,7 @@ import {
   Eye, EyeOff, FolderSearch, FolderOpen, Search, Copy,
   RotateCcw, Trash2, Plug, Check, Sun, Moon, Monitor,
   Palette, Database, HardDrive, Info, RefreshCw, ChevronDown, Download, Mic,
-  ShieldCheck, Fingerprint, Lock, KeyRound, Bell, Globe, BarChart2, X
+  ShieldCheck, Fingerprint, Lock, KeyRound, Bell, Globe, BarChart2, X, UserRound
 } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import './SettingsPage.scss'
@@ -34,6 +34,8 @@ const tabs: { id: SettingsTab; label: string; icon: React.ElementType }[] = [
 interface WxidOption {
   wxid: string
   modifiedTime: number
+  nickname?: string
+  avatarUrl?: string
 }
 
 interface SettingsPageProps {
@@ -102,12 +104,14 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
   const [transcribeLanguages, setTranscribeLanguages] = useState<string[]>(['zh'])
 
   const [notificationEnabled, setNotificationEnabled] = useState(true)
-  const [notificationPosition, setNotificationPosition] = useState<'top-right' | 'top-left' | 'bottom-right' | 'bottom-left'>('top-right')
+  const [notificationPosition, setNotificationPosition] = useState<'top-right' | 'top-left' | 'bottom-right' | 'bottom-left' | 'top-center'>('top-right')
   const [notificationFilterMode, setNotificationFilterMode] = useState<'all' | 'whitelist' | 'blacklist'>('all')
   const [notificationFilterList, setNotificationFilterList] = useState<string[]>([])
+  const [windowCloseBehavior, setWindowCloseBehavior] = useState<configService.WindowCloseBehavior>('ask')
   const [filterSearchKeyword, setFilterSearchKeyword] = useState('')
   const [filterModeDropdownOpen, setFilterModeDropdownOpen] = useState(false)
   const [positionDropdownOpen, setPositionDropdownOpen] = useState(false)
+  const [closeBehaviorDropdownOpen, setCloseBehaviorDropdownOpen] = useState(false)
 
   const [wordCloudExcludeWords, setWordCloudExcludeWords] = useState<string[]>([])
   const [excludeWordsInput, setExcludeWordsInput] = useState('')
@@ -251,15 +255,16 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
       if (!target.closest('.custom-select')) {
         setFilterModeDropdownOpen(false)
         setPositionDropdownOpen(false)
+        setCloseBehaviorDropdownOpen(false)
       }
     }
-    if (filterModeDropdownOpen || positionDropdownOpen) {
+    if (filterModeDropdownOpen || positionDropdownOpen || closeBehaviorDropdownOpen) {
       document.addEventListener('click', handleClickOutside)
     }
     return () => {
       document.removeEventListener('click', handleClickOutside)
     }
-  }, [filterModeDropdownOpen, positionDropdownOpen])
+  }, [closeBehaviorDropdownOpen, filterModeDropdownOpen, positionDropdownOpen])
 
 
   const loadConfig = async () => {
@@ -281,6 +286,7 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
       const savedNotificationPosition = await configService.getNotificationPosition()
       const savedNotificationFilterMode = await configService.getNotificationFilterMode()
       const savedNotificationFilterList = await configService.getNotificationFilterList()
+      const savedWindowCloseBehavior = await configService.getWindowCloseBehavior()
 
       const savedAuthEnabled = await window.electronAPI.auth.verifyEnabled()
       const savedAuthUseHello = await configService.getAuthUseHello()
@@ -316,6 +322,7 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
       setNotificationPosition(savedNotificationPosition)
       setNotificationFilterMode(savedNotificationFilterMode)
       setNotificationFilterList(savedNotificationFilterList)
+      setWindowCloseBehavior(savedWindowCloseBehavior)
 
       const savedExcludeWords = await configService.getWordCloudExcludeWords()
       setWordCloudExcludeWords(savedExcludeWords)
@@ -1022,6 +1029,61 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
           </div>
         ))}
       </div>
+
+      <div className="divider" />
+
+      <div className="form-group">
+        <label>关闭主窗口时</label>
+        <span className="form-hint">设置点击关闭按钮后的默认行为；选择“每次询问”时会弹出关闭确认。</span>
+        <div className="custom-select">
+          <div
+            className={`custom-select-trigger ${closeBehaviorDropdownOpen ? 'open' : ''}`}
+            onClick={() => setCloseBehaviorDropdownOpen(!closeBehaviorDropdownOpen)}
+          >
+            <span className="custom-select-value">
+              {windowCloseBehavior === 'tray'
+                ? '最小化到系统托盘'
+                : windowCloseBehavior === 'quit'
+                  ? '完全关闭'
+                  : '每次询问'}
+            </span>
+            <ChevronDown size={14} className={`custom-select-arrow ${closeBehaviorDropdownOpen ? 'rotate' : ''}`} />
+          </div>
+          <div className={`custom-select-dropdown ${closeBehaviorDropdownOpen ? 'open' : ''}`}>
+            {[
+              {
+                value: 'ask' as const,
+                label: '每次询问',
+                successMessage: '已恢复关闭确认弹窗'
+              },
+              {
+                value: 'tray' as const,
+                label: '最小化到系统托盘',
+                successMessage: '关闭按钮已改为最小化到托盘'
+              },
+              {
+                value: 'quit' as const,
+                label: '完全关闭',
+                successMessage: '关闭按钮已改为完全关闭'
+              }
+            ].map(option => (
+              <div
+                key={option.value}
+                className={`custom-select-option ${windowCloseBehavior === option.value ? 'selected' : ''}`}
+                onClick={async () => {
+                  setWindowCloseBehavior(option.value)
+                  setCloseBehaviorDropdownOpen(false)
+                  await configService.setWindowCloseBehavior(option.value)
+                  showMessage(option.successMessage, true)
+                }}
+              >
+                {option.label}
+                {windowCloseBehavior === option.value && <Check size={14} />}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   )
 
@@ -1102,12 +1164,14 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
               <span className="custom-select-value">
                 {notificationPosition === 'top-right' ? '右上角' :
                   notificationPosition === 'bottom-right' ? '右下角' :
-                    notificationPosition === 'top-left' ? '左上角' : '左下角'}
+                    notificationPosition === 'top-left' ? '左上角' :
+                      notificationPosition === 'top-center' ? '中间上方' : '左下角'}
               </span>
               <ChevronDown size={14} className={`custom-select-arrow ${positionDropdownOpen ? 'rotate' : ''}`} />
             </div>
             <div className={`custom-select-dropdown ${positionDropdownOpen ? 'open' : ''}`}>
               {[
+                { value: 'top-center', label: '中间上方' },
                 { value: 'top-right', label: '右上角' },
                 { value: 'bottom-right', label: '右下角' },
                 { value: 'top-left', label: '左上角' },
@@ -1117,7 +1181,7 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
                   key={option.value}
                   className={`custom-select-option ${notificationPosition === option.value ? 'selected' : ''}`}
                   onClick={async () => {
-                    const val = option.value as 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left'
+                    const val = option.value as 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left' | 'top-center'
                     setNotificationPosition(val)
                     setPositionDropdownOpen(false)
                     await configService.setNotificationPosition(val)
@@ -2130,14 +2194,24 @@ function SettingsPage({ onClose }: SettingsPageProps = {}) {
               </div>
               <div className="wxid-dialog-list">
                 {wxidOptions.map((opt) => (
-                  <div
-                    key={opt.wxid}
-                    className={`wxid-dialog-item ${opt.wxid === wxid ? 'active' : ''}`}
-                    onClick={() => handleSelectWxid(opt.wxid)}
-                  >
-                    <span className="wxid-id">{opt.wxid}</span>
-                    <span className="wxid-date">最后修改 {new Date(opt.modifiedTime).toLocaleString()}</span>
-                  </div>
+                    <div
+                        key={opt.wxid}
+                        className={`wxid-dialog-item ${opt.wxid === wxid ? 'active' : ''}`}
+                        onClick={() => handleSelectWxid(opt.wxid)}
+                    >
+                      <div className="wxid-profile-row">
+                        {opt.avatarUrl ? (
+                            <img src={opt.avatarUrl} alt="avatar" className="wxid-avatar" />
+                        ) : (
+                            <div className="wxid-avatar-fallback"><UserRound size={18}/></div>
+                        )}
+                        <div className="wxid-info-col">
+                          <span className="wxid-id">{opt.nickname || opt.wxid}</span>
+                          {opt.nickname && <span className="wxid-date">{opt.wxid}</span>}
+                        </div>
+                      </div>
+                      <span className="wxid-date" style={{marginLeft: 'auto'}}>最后修改 {new Date(opt.modifiedTime).toLocaleString()}</span>
+                    </div>
                 ))}
               </div>
               <div className="wxid-dialog-footer">

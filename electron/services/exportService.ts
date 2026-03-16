@@ -562,23 +562,50 @@ class ExportService {
   }
 
   /**
-   * 通过 contact.chat_room.ext_buffer 解析群昵称（纯 SQL）
+   * 获取群成员群昵称。优先使用 DLL，必要时回退到 `contact.chat_room.ext_buffer` 解析。
    */
   async getGroupNicknamesForRoom(chatroomId: string, candidates: string[] = []): Promise<Map<string, string>> {
+    const nicknameMap = new Map<string, string>()
+
     try {
-      // 使用参数化查询防止SQL注入
+      const dllResult = await wcdbService.getGroupNicknames(chatroomId)
+      if (dllResult.success && dllResult.nicknames) {
+        this.mergeGroupNicknameEntries(nicknameMap, Object.entries(dllResult.nicknames))
+      }
+    } catch (e) {
+      console.error('getGroupNicknamesForRoom dll error:', e)
+    }
+
+    try {
       const sql = 'SELECT ext_buffer FROM chat_room WHERE username = ? LIMIT 1'
       const result = await wcdbService.execQuery('contact', null, sql, [chatroomId])
       if (!result.success || !result.rows || result.rows.length === 0) {
-        return new Map<string, string>()
+        return nicknameMap
       }
 
       const extBuffer = this.decodeExtBuffer((result.rows[0] as any).ext_buffer)
-      if (!extBuffer) return new Map<string, string>()
-      return this.parseGroupNicknamesFromExtBuffer(extBuffer, candidates)
+      if (!extBuffer) return nicknameMap
+      this.mergeGroupNicknameEntries(nicknameMap, this.parseGroupNicknamesFromExtBuffer(extBuffer, candidates).entries())
+      return nicknameMap
     } catch (e) {
       console.error('getGroupNicknamesForRoom error:', e)
-      return new Map<string, string>()
+      return nicknameMap
+    }
+  }
+
+  private mergeGroupNicknameEntries(
+    target: Map<string, string>,
+    entries: Iterable<[string, string]>
+  ): void {
+    for (const [memberIdRaw, nicknameRaw] of entries) {
+      const nickname = this.normalizeGroupNickname(nicknameRaw || '')
+      if (!nickname) continue
+      for (const alias of this.buildGroupNicknameIdCandidates([memberIdRaw])) {
+        if (!alias) continue
+        if (!target.has(alias)) target.set(alias, nickname)
+        const lower = alias.toLowerCase()
+        if (!target.has(lower)) target.set(lower, nickname)
+      }
     }
   }
 
@@ -4453,6 +4480,7 @@ class ExportService {
 
       const cleanedMyWxid = conn.cleanedWxid
       const isGroup = sessionId.includes('@chatroom')
+      const rawMyWxid = String(this.configService.get('myWxid') || '').trim()
 
       const sessionInfo = await this.getContactInfo(sessionId)
       const myInfo = await this.getContactInfo(cleanedMyWxid)
@@ -5650,6 +5678,7 @@ class ExportService {
 
       const cleanedMyWxid = conn.cleanedWxid
       const isGroup = sessionId.includes('@chatroom')
+      const rawMyWxid = String(this.configService.get('myWxid') || '').trim()
       const sessionInfo = await this.getContactInfo(sessionId)
       const myInfo = await this.getContactInfo(cleanedMyWxid)
       const contactCache = new Map<string, { success: boolean; contact?: any; error?: string }>()

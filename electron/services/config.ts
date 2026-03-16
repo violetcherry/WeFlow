@@ -47,9 +47,10 @@ interface ConfigSchema {
 
   // 通知
   notificationEnabled: boolean
-  notificationPosition: 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left'
+  notificationPosition: 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left' | 'top-center'
   notificationFilterMode: 'all' | 'whitelist' | 'blacklist'
   notificationFilterList: string[]
+  windowCloseBehavior: 'ask' | 'tray' | 'quit'
   wordCloudExcludeWords: string[]
 }
 
@@ -116,6 +117,7 @@ export class ConfigService {
         notificationPosition: 'top-right',
         notificationFilterMode: 'all',
         notificationFilterList: [],
+        windowCloseBehavior: 'ask',
         wordCloudExcludeWords: []
       }
     })
